@@ -1,0 +1,12 @@
+{
+  "name": "hono-starter",
+  "type": "module",
+  "scripts": {
+    "dev": "node index.js",
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "hono": "^4.5.8"
+  }
+}
