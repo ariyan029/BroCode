@@ -47,6 +47,12 @@ export const usePlayground = (id: string): UsePlaygroundReturn => {
         return;
       }
 
+      if (typeof rawContent === "object" && rawContent !== null) {
+        setTemplateData(rawContent as any);
+        toast.success("playground loaded successfully");
+        return;
+      }
+
       //   load template from api if not in saved content
 
       const res = await fetch(`/api/template/${id}`);

@@ -136,6 +136,147 @@ const WebContainerPreview = ({
             "✅ Files mounted successfully\r\n"
           );
         }
+
+        // Check for package.json and determine project type
+        let hasPackageJson = false;
+        let packageJson: any = null;
+        try {
+          const rawPkg = await instance.fs.readFile("package.json", "utf8");
+          packageJson = JSON.parse(rawPkg);
+          hasPackageJson = true;
+        } catch {
+          hasPackageJson = false;
+        }
+
+        const isStaticSite = !hasPackageJson;
+
+        // Static HTTP server script for pure HTML/CSS/JS projects without a server
+        const staticServerScript = `const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
+const mimeTypes = {
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.webp': 'image/webp',
+  '.wav': 'audio/wav',
+  '.mp3': 'audio/mpeg',
+  '.mp4': 'video/mp4',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.wasm': 'application/wasm'
+};
+
+const server = http.createServer((req, res) => {
+  let reqPath = req.url.split('?')[0];
+  try {
+    reqPath = decodeURIComponent(reqPath);
+  } catch (e) {}
+
+  let targetPath = path.join(__dirname, reqPath);
+
+  try {
+    if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
+      targetPath = path.join(targetPath, 'index.html');
+    }
+  } catch (e) {}
+
+  if (!fs.existsSync(targetPath)) {
+    // Check root index.html as fallback
+    const rootIndex = path.join(__dirname, 'index.html');
+    if (fs.existsSync(rootIndex)) {
+      targetPath = rootIndex;
+    } else {
+      res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<h1>404 Not Found</h1><p>File not found: ' + reqPath + '</p>');
+      return;
+    }
+  }
+
+  const ext = String(path.extname(targetPath)).toLowerCase();
+  const contentType = mimeTypes[ext] || 'application/octet-stream';
+
+  fs.readFile(targetPath, (err, data) => {
+    if (err) {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('Internal Server Error: ' + err.code);
+    } else {
+      res.writeHead(200, { 'Content-Type': contentType });
+      res.end(data);
+    }
+  });
+});
+
+const PORT = 3000;
+server.listen(PORT, '0.0.0.0', () => {
+  console.log('Static web server running at http://localhost:' + PORT);
+});
+`;
+
+        if (isStaticSite) {
+          if (terminalRef.current?.writeToTerminal) {
+            terminalRef.current.writeToTerminal(
+              "📄 No package.json found (static HTML/CSS site detected).\r\n🛠️  Configuring built-in static web server...\r\n"
+            );
+          }
+
+          try {
+            await instance.fs.writeFile("server.js", staticServerScript);
+            packageJson = {
+              name: "static-html-site",
+              version: "1.0.0",
+              private: true,
+              scripts: {
+                start: "node server.js",
+                serve: "npx -y serve .",
+              },
+            };
+            await instance.fs.writeFile(
+              "package.json",
+              JSON.stringify(packageJson, null, 2)
+            );
+          } catch (e) {
+            console.error("Failed to write static server files:", e);
+          }
+        } else if (
+          packageJson &&
+          (!packageJson.scripts ||
+            (!packageJson.scripts.start &&
+              !packageJson.scripts.dev &&
+              !packageJson.scripts.serve))
+        ) {
+          try {
+            await instance.fs.writeFile("server.js", staticServerScript);
+            if (!packageJson.scripts) packageJson.scripts = {};
+            packageJson.scripts.start = "node server.js";
+            await instance.fs.writeFile(
+              "package.json",
+              JSON.stringify(packageJson, null, 2)
+            );
+          } catch (e) {}
+        }
+
+        // Determine start command (start -> dev -> serve -> start)
+        let startArgs = ["run", "start"];
+        if (packageJson?.scripts?.start) {
+          startArgs = ["run", "start"];
+        } else if (packageJson?.scripts?.dev) {
+          startArgs = ["run", "dev"];
+        } else if (packageJson?.scripts?.serve) {
+          startArgs = ["run", "serve"];
+        }
+
         setLoadingState((prev) => ({
           ...prev,
           mounting: false,
@@ -144,37 +285,44 @@ const WebContainerPreview = ({
         setCurrentStep(3);
 
         // Step-3 Install dependencies
+        if (isStaticSite) {
+          if (terminalRef.current?.writeToTerminal) {
+            terminalRef.current.writeToTerminal(
+              "⚡ Static site: zero dependencies needed. Ready to serve!\r\n"
+            );
+          }
+        } else {
+          if (terminalRef.current?.writeToTerminal) {
+            terminalRef.current.writeToTerminal(
+              "📦 Installing dependencies...\r\n"
+            );
+          }
 
-        if (terminalRef.current?.writeToTerminal) {
-          terminalRef.current.writeToTerminal(
-            "📦 Installing dependencies...\r\n"
+          const installProcess = await instance.spawn("npm", ["install"]);
+
+          installProcess.output.pipeTo(
+            new WritableStream({
+              write(data) {
+                if (terminalRef.current?.writeToTerminal) {
+                  terminalRef.current.writeToTerminal(data);
+                }
+              },
+            })
           );
-        }
 
-        const installProcess = await instance.spawn("npm", ["install"]);
+          const installExitCode = await installProcess.exit;
 
-        installProcess.output.pipeTo(
-          new WritableStream({
-            write(data) {
-              if (terminalRef.current?.writeToTerminal) {
-                terminalRef.current.writeToTerminal(data);
-              }
-            },
-          })
-        );
+          if (installExitCode !== 0) {
+            throw new Error(
+              `Failed to install dependencies. Exit code: ${installExitCode}`
+            );
+          }
 
-        const installExitCode = await installProcess.exit;
-
-        if (installExitCode !== 0) {
-          throw new Error(
-            `Failed to install dependencies. Exit code: ${installExitCode}`
-          );
-        }
-
-        if (terminalRef.current?.writeToTerminal) {
-          terminalRef.current.writeToTerminal(
-            "✅ Dependencies installed successfully\r\n"
-          );
+          if (terminalRef.current?.writeToTerminal) {
+            terminalRef.current.writeToTerminal(
+              "✅ Dependencies installed successfully\r\n"
+            );
+          }
         }
 
         setLoadingState((prev) => ({
@@ -188,11 +336,11 @@ const WebContainerPreview = ({
 
         if (terminalRef.current?.writeToTerminal) {
           terminalRef.current.writeToTerminal(
-            "🚀 Starting development server...\r\n"
+            `🚀 Starting development server (npm ${startArgs.join(" ")})...\r\n`
           );
         }
 
-        const startProcess = await instance.spawn("npm", ["run", "start"]);
+        const startProcess = await instance.spawn("npm", startArgs);
 
         instance.on("server-ready", (port: number, url: string) => {
           if (terminalRef.current?.writeToTerminal) {
